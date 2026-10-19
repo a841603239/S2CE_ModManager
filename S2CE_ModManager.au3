@@ -1,4 +1,4 @@
-﻿#pragma compile(ProductName, "S2CE ModManager")     ; 产品名称
+#pragma compile(ProductName, "S2CE ModManager")     ; 产品名称
 #pragma compile(Comments, "Freeware")       ; Comments
 
 #include <GUIConstantsEx.au3>
@@ -20,24 +20,24 @@ Opt("MustDeclareVars", 1)
 Opt("GUIOnEventMode", 0)
 
 ; Banner Base64 is kept in S2CE_BannerData.au3. Both AU3 files must be together.
-Global Const $APP = "S2CE ModManager 1.0"
-Global Const $INI = @ScriptDir & "\S2CE_ModManager.ini"
-Global Const $STEAM_URI = "steam://rungameid/34330"
-Global Const $SCRIPT_DEFAULT = @AppDataDir & "\The Creative Assembly\Shogun2\scripts"
+Global Const $APP = "S2CE ModManager 1.1"
+Global Const $STEAM_URI = "steam://rungameid/3846830"
+Global Const $SCRIPT_DEFAULT = @AppDataDir & "\The Creative Assembly\Shogun2CompleteEdition\Steam\scripts"
 Global $gGameDir = "", $gScriptDir = $SCRIPT_DEFAULT
 Global $gDataDir = "", $gDisabledDir = "", $gScriptFile = ""
 Global $gGUI, $gList, $gListH, $gLblGame, $gLblScript, $gLblStatus, $gLog
 Global $gBtnBrowseGame, $gBtnBrowseScript, $gBtnOpenGame, $gBtnOpenScript, $gBtnScan, $gBtnActivate, $gBtnDeactivate
 Global $gBtnMoveUp, $gBtnMoveDown
 Global $gBtnLangEnglish, $gBtnLangChinese
-Global $gLang = "EN" ; Default language: English
+Global $gLang = _DetectDefaultLanguage() ; 中文系统用中文，其余用英文
 Global $gBtnSteam, $gBtnOpenData, $gBtnOpenDisabled
 Global $gLblReadyLight, $gLblReadyText
 Global $gBusy = False
 Global $gBannerPath = ""
 Global $g_iZoom = _GetSystemDpiZoom()
 
-_LoadConfig()
+; 自动检测游戏安装目录
+$gGameDir = _FindGameDir()
 _UpdatePaths()
 _PrepareEmbeddedBanner()
 
@@ -87,6 +87,15 @@ GUIDelete($gGUI)
 If $gBannerPath <> "" And FileExists($gBannerPath) Then FileDelete($gBannerPath)
 Exit
 
+Func _DetectDefaultLanguage()
+    ; 0804=简中(中国), 0404=繁中(台湾), 0C04=繁中(香港),
+    ; 1004=简中(新加坡), 1404=繁中(澳门)
+    Switch @OSLang
+        Case "0804", "0404", "0C04", "1004", "1404"
+            Return "ZH"
+    EndSwitch
+    Return "EN"
+EndFunc
 
 Func _T($sText)
     If $gLang = "ZH" Then Return $sText
@@ -584,18 +593,6 @@ Func _StyleButton($id)
     GUICtrlSetFont($id, 9, 600, 0, "Segoe UI")
 EndFunc
 
-Func _LoadConfig()
-    $gGameDir = IniRead($INI, "Paths", "GameDir", "")
-    $gScriptDir = IniRead($INI, "Paths", "ScriptDir", $SCRIPT_DEFAULT)
-    If $gGameDir = "" Or Not FileExists($gGameDir & "\data") Then $gGameDir = _FindGameDir()
-    If Not FileExists($gScriptDir) Then $gScriptDir = $SCRIPT_DEFAULT
-EndFunc
-
-Func _SaveConfig()
-    IniWrite($INI, "Paths", "GameDir", $gGameDir)
-    IniWrite($INI, "Paths", "ScriptDir", $gScriptDir)
-EndFunc
-
 Func _FindGameDir()
     ; 按用户指定的顺序检查常见安装位置。
     Local $a[6] = [ _
@@ -652,7 +649,6 @@ Func _ChooseGameDir()
     EndIf
     $gGameDir = $s
     _UpdatePaths()
-    _SaveConfig()
     _RefreshPathLabels()
     _ScanMods()
 EndFunc
@@ -662,7 +658,6 @@ Func _ChooseScriptDir()
     If @error Or $s = "" Then Return
     $gScriptDir = $s
     _UpdatePaths()
-    _SaveConfig()
     _RefreshPathLabels()
     _Log(_T("已更新用户脚本目录。"))
 EndFunc
