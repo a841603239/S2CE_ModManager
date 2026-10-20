@@ -26,11 +26,11 @@ S2CE ModManager 会扫描游戏的 `data` 目录和 `Disabled_Mods` 目录，并
 S2CE-ModManager/
 ├── README.md                  # 英文文档（默认）
 ├── README_zh.md               # 简体中文文档
-├── S2CE_ModManager_11.au3     # AutoIt 主程序源码
+├── S2CE_ModManager.au3     # AutoIt 主程序源码
 └── S2CE_BannerData.au3        # 内嵌横幅图片数据
 ```
 
-主程序 `S2CE_ModManager_11.au3` 通过 `#include` 引入 `S2CE_BannerData.au3`。**运行或编译源码时，这两个 AU3 文件必须放在同一目录。** 编译后，图片数据会一起编入 EXE。
+主程序 `S2CE_ModManager.au3` 通过 `#include` 引入 `S2CE_BannerData.au3`。**运行或编译源码时，这两个 AU3 文件必须放在同一目录。** 编译后，图片数据会一起编入 EXE。
 
 ## 系统要求
 
@@ -43,13 +43,13 @@ S2CE-ModManager/
 ## 运行源码
 
 1. 克隆或下载本仓库。
-2. 将 `S2CE_ModManager_11.au3` 和 `S2CE_BannerData.au3` 放在同一文件夹。
-3. 使用 AutoIt 运行 `S2CE_ModManager_11.au3`。
+2. 将 `S2CE_ModManager.au3` 和 `S2CE_BannerData.au3` 放在同一文件夹。
+3. 使用 AutoIt 运行 `S2CE_ModManager.au3`。
 
 ## 编译为 EXE
 
 1. 安装 AutoIt v3 和 SciTE for AutoIt3。
-2. 使用 SciTE 打开 `S2CE_ModManager_11.au3`。
+2. 使用 SciTE 打开 `S2CE_ModManager.au3`。
 3. 按 **F7** 编译。
 4. 运行生成的 EXE。
 
