@@ -26,11 +26,11 @@ S2CE ModManager scans the game's `data` directory and a `Disabled_Mods` director
 S2CE-ModManager/
 ├── README.md                  # English documentation (default)
 ├── README_zh.md               # Simplified Chinese documentation
-├── S2CE_ModManager_11.au3     # Main AutoIt source
+├── S2CE_ModManager.au3     # Main AutoIt source
 └── S2CE_BannerData.au3        # Embedded banner image data
 ```
 
-`S2CE_ModManager_11.au3` includes `S2CE_BannerData.au3`. **Keep both AU3 files in the same directory when running or compiling the source.** When compiled, the included data is compiled into the executable.
+`S2CE_ModManager.au3` includes `S2CE_BannerData.au3`. **Keep both AU3 files in the same directory when running or compiling the source.** When compiled, the included data is compiled into the executable.
 
 ## Requirements
 
@@ -43,13 +43,13 @@ This repository does not currently include a prebuilt executable.
 ## Run from source
 
 1. Clone or download this repository.
-2. Keep `S2CE_ModManager_11.au3` and `S2CE_BannerData.au3` in the same folder.
-3. Run `S2CE_ModManager_11.au3` with AutoIt.
+2. Keep `S2CE_ModManager.au3` and `S2CE_BannerData.au3` in the same folder.
+3. Run `S2CE_ModManager.au3` with AutoIt.
 
 ## Compile to an executable
 
 1. Install AutoIt v3 and SciTE for AutoIt3.
-2. Open `S2CE_ModManager_11.au3` in SciTE.
+2. Open `S2CE_ModManager.au3` in SciTE.
 3. Press **F7** to compile.
 4. Run the generated executable.
 
