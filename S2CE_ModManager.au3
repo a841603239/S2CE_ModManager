@@ -172,6 +172,16 @@ Func _T($sText)
             Return "Select the game root containing the data folder"
         Case "所选目录不包含 data 子目录。"
             Return "The selected folder does not contain a data subfolder."
+        Case "所选目录未找到 shogun2_complete_edition.exe，请选择正确的游戏目录。"
+            Return "shogun2_complete_edition.exe was not found. Select the correct game folder."
+        Case "游戏目录无效，请重新设置游戏目录。"
+            Return "The game folder is invalid. Please set the game folder again."
+        Case "用户脚本目录未设置，请设置有效的用户脚本目录。"
+            Return "The user script folder is not set. Please choose a valid folder."
+        Case "无法写入用户脚本目录，请检查路径和权限："
+            Return "Cannot write to the user script folder. Check the path and permissions: "
+        Case "激活时会将勾选且位于 Disabled_Mods 的 PACK 移至 data；已在 data 的 PACK 不重复移动。操作后将清空并重建 user.script.txt，写入 data 中全部用户 PACK。"
+            Return "Activation moves checked PACKs from Disabled_Mods to data; PACKs already in data are not moved again. Afterwards user.script.txt is cleared and rebuilt with all user PACKs in data."
         Case "请选择用户脚本目录"
             Return "Select the user script folder"
         Case "已更新用户脚本目录。"
@@ -627,7 +637,7 @@ Func _RefreshPathLabels()
 EndFunc
 
 Func _UpdateReadyLight()
-    Local $bGameOK = ($gGameDir <> "" And FileExists($gGameDir & "\shogun2_complete_edition.exe"))
+    Local $bGameOK = ($gGameDir <> "" And FileExists($gGameDir & "\data") And FileExists($gGameDir & "\shogun2_complete_edition.exe"))
     Local $bScriptOK = ($gScriptFile <> "" And FileExists($gScriptFile))
     If $bGameOK And $bScriptOK Then
         GUICtrlSetColor($gLblReadyLight, 0x45D483)
@@ -645,6 +655,10 @@ Func _ChooseGameDir()
     If @error Or $s = "" Then Return
     If Not FileExists($s & "\data") Then
         MsgBox($MB_ICONWARNING, $APP, _T("所选目录不包含 data 子目录。"))
+        Return
+    EndIf
+    If Not FileExists($s & "\shogun2_complete_edition.exe") Then
+        MsgBox($MB_ICONWARNING, $APP, _T("所选目录未找到 shogun2_complete_edition.exe，请选择正确的游戏目录。"))
         Return
     EndIf
     $gGameDir = $s
@@ -857,10 +871,8 @@ EndFunc
 
 Func _ApplyMods($bEnable)
     If $gBusy Then Return
-    If $gGameDir = "" Or Not FileExists($gDataDir) Then
-        MsgBox($MB_ICONWARNING, $APP, _T("请先设置有效的游戏目录。"))
-        Return
-    EndIf
+    ; 任何激活/停用操作开始前，先验证游戏目录和用户脚本目录。
+    If Not _ValidatePaths() Then Return
     Local $sActionNoun = ""
     If $bEnable Then
         $sActionNoun = ($gLang = "EN" ? "Activation" : _T("激活"))
@@ -869,7 +881,7 @@ Func _ApplyMods($bEnable)
     EndIf
     Local $sConfirm = ""
     If $bEnable Then
-        $sConfirm = _T("仅处理已勾选且位于 Disabled_Mods 的 PACK：移入 data 目录并加入 user.script.txt。")
+        $sConfirm = _T("激活时会将勾选且位于 Disabled_Mods 的 PACK 移至 data；已在 data 的 PACK 不重复移动。操作后将清空并重建 user.script.txt，写入 data 中全部用户 PACK。")
     Else
         $sConfirm = _T("仅处理已勾选且位于 data 的 PACK：移入 Disabled_Mods 目录并从 user.script.txt 移除。")
     EndIf
@@ -935,13 +947,24 @@ Func _ApplyMods($bEnable)
         EndIf
     Next
 
-    If $bNeedScript Then
-        If Not _UpdateScript($aChanges) Then
+    If $bEnable Then
+        ; 先重新扫描磁盘上的实际状态。即使没有移动任何文件，也必须重建脚本，
+        ; 这样已位于 data 的 PACK 也会被写入 user.script.txt。
+        _ScanMods()
+        If Not _RebuildActiveScript() Then
             _Log(_T("严重警告：脚本更新失败。文件移动已完成，请手动检查并修正 user.script.txt。"))
             MsgBox($MB_ICONWARNING, $APP, _T("PACK 文件移动已执行，但 user.script.txt 更新失败。") & @CRLF & _T("请检查用户脚本文件：") & @CRLF & $gScriptDir)
         EndIf
+    Else
+        ; 停用操作继续采用原有的差量更新逻辑。
+        If $bNeedScript Then
+            If Not _UpdateScript($aChanges) Then
+                _Log(_T("严重警告：脚本更新失败。文件移动已完成，请手动检查并修正 user.script.txt。"))
+                MsgBox($MB_ICONWARNING, $APP, _T("PACK 文件移动已执行，但 user.script.txt 更新失败。") & @CRLF & _T("请检查用户脚本文件：") & @CRLF & $gScriptDir)
+            EndIf
+        EndIf
+        _ScanMods()
     EndIf
-    _ScanMods()
     _SetStatus($sActionNoun & _T("完成：成功移动 ") & $iMoved & _T(" 个，失败/跳过 ") & $iFailed & _T(" 个。"))
     _Log($sActionNoun & _T("结束。移动=") & $iMoved & _T("，失败/跳过=") & $iFailed)
     $gBusy = False
@@ -1129,6 +1152,93 @@ Func _IsInFolder($sPath, $sFolder)
     Local $p = StringLower(StringReplace($sPath, "/", "\"))
     Local $f = StringLower(StringRight($sFolder, 1) = "\" ? $sFolder : $sFolder & "\")
     Return StringLeft($p, StringLen($f)) = $f
+EndFunc
+
+Func _ValidatePaths()
+    ; 游戏根目录必须同时包含 data 目录和主程序，避免误把其他目录当作游戏目录。
+    If $gGameDir = "" Then
+        MsgBox($MB_ICONWARNING, $APP, _T("请先设置有效的游戏目录。") & @CRLF & _T("请选择包含 data 子目录的游戏根目录"))
+        Return False
+    EndIf
+    If Not FileExists($gGameDir & "\data") Or Not FileExists($gGameDir & "\shogun2_complete_edition.exe") Then
+        MsgBox($MB_ICONWARNING, $APP, _T("游戏目录无效，请重新设置游戏目录。") & @CRLF & $gGameDir & @CRLF & _T("请选择包含 data 子目录的游戏根目录"))
+        Return False
+    EndIf
+
+    ; 脚本文件本身可以尚不存在；脚本目录则必须可创建、可写。
+    If $gScriptDir = "" Then
+        MsgBox($MB_ICONWARNING, $APP, _T("用户脚本目录未设置，请设置有效的用户脚本目录。"))
+        Return False
+    EndIf
+    If Not FileExists($gScriptDir) Then DirCreate($gScriptDir)
+    If Not FileExists($gScriptDir) Or Not StringInStr(FileGetAttrib($gScriptDir), "D") Then
+        MsgBox($MB_ICONWARNING, $APP, _T("无法写入用户脚本目录，请检查路径和权限：") & @CRLF & $gScriptDir)
+        Return False
+    EndIf
+
+    ; 如果脚本文件已经存在，先检查其是否可写；仅打开再关闭，不改变内容。
+    If FileExists($gScriptFile) Then
+        If StringInStr(FileGetAttrib($gScriptFile), "R") Then
+            MsgBox($MB_ICONWARNING, $APP, _T("无法写入用户脚本目录，请检查路径和权限：") & @CRLF & $gScriptFile)
+            Return False
+        EndIf
+        Local $hScriptProbe = FileOpen($gScriptFile, BitOR($FO_APPEND, $FO_UTF16_LE))
+        If $hScriptProbe = -1 Then
+            MsgBox($MB_ICONWARNING, $APP, _T("无法写入用户脚本目录，请检查路径和权限：") & @CRLF & $gScriptFile)
+            Return False
+        EndIf
+        FileClose($hScriptProbe)
+    EndIf
+
+    ; 用独立临时文件实际验证目录写权限，不碰触已有的 user.script.txt 内容。
+    Local $sProbe = $gScriptDir & "\.__s2ce_write_test_" & @AutoItPID & ".tmp"
+    Local $hProbe = FileOpen($sProbe, $FO_OVERWRITE)
+    If $hProbe = -1 Then
+        MsgBox($MB_ICONWARNING, $APP, _T("无法写入用户脚本目录，请检查路径和权限：") & @CRLF & $gScriptDir)
+        Return False
+    EndIf
+    FileWrite($hProbe, "S2CE")
+    Local $iProbeError = @error
+    FileClose($hProbe)
+    FileDelete($sProbe)
+    If $iProbeError Then
+        MsgBox($MB_ICONWARNING, $APP, _T("无法写入用户脚本目录，请检查路径和权限：") & @CRLF & $gScriptDir)
+        Return False
+    EndIf
+    Return True
+EndFunc
+
+Func _RebuildActiveScript()
+    If $gScriptDir = "" Then Return False
+    If Not FileExists($gScriptDir) And Not DirCreate($gScriptDir) Then Return False
+
+    ; _ScanMods 已按旧脚本的顺序排列当前 data 中的用户 PACK；
+    ; 只从实际存在于 data 的扫描结果生成新脚本，不保留旧注释或旧指令。
+    Local $sNew = ""
+    Local $iCount = _GUICtrlListView_GetItemCount($gListH)
+    For $i = 0 To $iCount - 1
+        Local $sName = _GUICtrlListView_GetItemText($gListH, $i, 1)
+        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 5)
+        If $sName = "" Or $sPath = "" Then ContinueLoop
+        If Not _IsInFolder($sPath, $gDataDir) Then ContinueLoop
+        If Not FileExists($sPath) Then ContinueLoop
+        If $sNew <> "" Then $sNew &= @CRLF
+        $sNew &= "mod """ & $sName & """;"
+    Next
+    If $sNew <> "" Then $sNew &= @CRLF
+
+    ; FO_OVERWRITE 会先截断/清空 user.script.txt，再把完整的新内容写入。
+    ; 空列表时也打开并覆盖文件，从而得到真正的空脚本。
+    Local $hWrite = FileOpen($gScriptFile, BitOR($FO_OVERWRITE, $FO_UTF16_LE))
+    If $hWrite = -1 Then Return False
+    Local $bOK = True
+    If $sNew <> "" Then
+        FileWrite($hWrite, $sNew)
+        $bOK = (@error = 0)
+    EndIf
+    FileClose($hWrite)
+    If $bOK Then _Log(_T("user.script.txt 已更新（UTF-16 LE）。"))
+    Return $bOK
 EndFunc
 
 Func _UpdateScript(ByRef $aChanges)
