@@ -20,7 +20,7 @@ Opt("MustDeclareVars", 1)
 Opt("GUIOnEventMode", 0)
 
 ; Banner Base64 is kept in S2CE_BannerData.au3. Both AU3 files must be together.
-Global Const $APP = "S2CE ModManager 1.1"
+Global Const $APP = "S2CE ModManager 1.2"
 Global Const $STEAM_URI = "steam://rungameid/3846830"
 Global Const $SCRIPT_DEFAULT = @AppDataDir & "\The Creative Assembly\Shogun2CompleteEdition\Steam\scripts"
 Global $gGameDir = "", $gScriptDir = $SCRIPT_DEFAULT
