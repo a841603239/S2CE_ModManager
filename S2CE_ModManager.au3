@@ -1,4 +1,4 @@
-#pragma compile(ProductName, "S2CE ModManager")     ; 产品名称
+﻿#pragma compile(ProductName, "S2CE ModManager")     ; 产品名称
 #pragma compile(Comments, "Freeware")       ; Comments
 
 #include <GUIConstantsEx.au3>
@@ -11,26 +11,28 @@
 #include <EditConstants.au3>
 #include <Array.au3>
 #include <File.au3>
-#include "S2CE_BannerData.au3"
+#include "BannerData_S2CE.au3"
 
 ; 适用于 Windows 10 1703 及更高版本
 DllCall("user32.dll", "bool", "SetProcessDpiAwarenessContext", "int64", -4) ; -4 对应 PER_MONITOR_AWARE_V2
 
 Opt("MustDeclareVars", 1)
 Opt("GUIOnEventMode", 0)
+Opt("TrayIconHide", 1)
 
 ; Banner Base64 is kept in S2CE_BannerData.au3. Both AU3 files must be together.
-Global Const $APP = "S2CE ModManager 1.2"
+Global Const $APP = "S2CE ModManager 1.3"
 Global Const $STEAM_URI = "steam://rungameid/3846830"
 Global Const $SCRIPT_DEFAULT = @AppDataDir & "\The Creative Assembly\Shogun2CompleteEdition\Steam\scripts"
 Global $gGameDir = "", $gScriptDir = $SCRIPT_DEFAULT
 Global $gDataDir = "", $gDisabledDir = "", $gScriptFile = ""
 Global $gGUI, $gList, $gListH, $gLblGame, $gLblScript, $gLblStatus, $gLog
+Global $gListNotifyRegistered = False
 Global $gBtnBrowseGame, $gBtnBrowseScript, $gBtnOpenGame, $gBtnOpenScript, $gBtnScan, $gBtnActivate, $gBtnDeactivate
 Global $gBtnMoveUp, $gBtnMoveDown
 Global $gBtnLangEnglish, $gBtnLangChinese
 Global $gLang = _DetectDefaultLanguage() ; 中文系统用中文，其余用英文
-Global $gBtnSteam, $gBtnOpenData, $gBtnOpenDisabled
+Global $gBtnSteam, $gBtnLaunchExe, $gBtnOpenData, $gBtnOpenDisabled
 Global $gLblReadyLight, $gLblReadyText
 Global $gBusy = False
 Global $gBannerPath = ""
@@ -77,6 +79,8 @@ While True
         Case $gBtnSteam
             ShellExecute($STEAM_URI)
             _Log(_T("已请求通过 Steam 启动游戏。"))
+        Case $gBtnLaunchExe
+            _LaunchGameExe()
         Case $gBtnOpenData
             _OpenFolder($gDataDir)
         Case $gBtnOpenDisabled
@@ -126,10 +130,10 @@ Func _T($sText)
             Return "Open user.script.txt"
         Case "使用说明"
             Return "Instructions"
-        Case "1.先勾选需要处理的 PACK；未勾选项不操作。"
-            Return "1. Check target PACKs; unchecked items are skipped."
-        Case "2.激活：将勾选且位于 Disabled_Mods 的 PACK 移回 data，并更新 user.script.txt。"
-            Return "2. Activate: move from Disabled_Mods to data; update user.script.txt."
+        Case "1.仅位于 data 且登记在 user.script.txt 的 PACK 自动勾选。"
+            Return "1. Only PACKs in data and listed in user.script.txt are checked."
+        Case "2.激活：勾选目标 PACK；需要时移回 data，并加入脚本。"
+            Return "2. Activate: check target PACKs; move to data if needed and register them."
         Case "3.停用：将勾选且位于 data 的 PACK 移至 Disabled_Mods，并更新 user.script.txt。"
             Return "3. Deactivate: move from data to Disabled_Mods; update user.script.txt."
         Case "4.选择已激活的 PACK 行，使用上移/下移调整加载顺序。"
@@ -144,8 +148,22 @@ Func _T($sText)
             Return "↓ Down"
         Case "配置缺失"
             Return "Config missing"
-        Case "选中|PACK 文件名|类型|大小|文件位置|内部路径"
-            Return "Check|PACK name|Type|Size|Location|Full path"
+        Case "选中|PACK 文件名|类型|大小|激活状态|文件位置|内部路径|真实状态"
+            Return "Check|PACK name|Type|Size|Status|Location|Full path|Actual state"
+        Case "已激活"
+            Return "Active"
+        Case "未激活"
+            Return "Inactive"
+        Case "待激活"
+            Return "Pending activation"
+        Case "待停用"
+            Return "Pending deactivation"
+        Case "状态未知"
+            Return "Unknown"
+        Case "未激活且已勾选"
+            Return "Inactive + checked"
+        Case "复选框指定批量操作目标；状态列显示实际激活状态。"
+            Return "Checkboxes choose batch targets; the Status column shows actual activation state."
         Case "重新扫描"
             Return "Rescan"
         Case "激活"
@@ -154,6 +172,12 @@ Func _T($sText)
             Return "Deactivate"
         Case "从Steam启动游戏"
             Return "Launch via Steam"
+        Case "直接启动游戏EXE"
+            Return "Launch Game EXE"
+        Case "已请求直接启动游戏。"
+            Return "Direct game launch requested."
+        Case "找不到游戏主程序，无法启动。"
+            Return "Game executable was not found; cannot launch."
         Case "打开 data"
             Return "Open data"
         Case "打开停用区"
@@ -180,8 +204,8 @@ Func _T($sText)
             Return "The user script folder is not set. Please choose a valid folder."
         Case "无法写入用户脚本目录，请检查路径和权限："
             Return "Cannot write to the user script folder. Check the path and permissions: "
-        Case "激活时会将勾选且位于 Disabled_Mods 的 PACK 移至 data；已在 data 的 PACK 不重复移动。操作后将清空并重建 user.script.txt，写入 data 中全部用户 PACK。"
-            Return "Activation moves checked PACKs from Disabled_Mods to data; PACKs already in data are not moved again. Afterwards user.script.txt is cleared and rebuilt with all user PACKs in data."
+        Case "激活时会将勾选且位于 Disabled_Mods 的 PACK 移至 data；位于 data 但尚未登记的勾选 PACK 也会加入 user.script.txt。不会自动启用其他未勾选的 PACK。"
+            Return "Activation moves checked PACKs from Disabled_Mods to data and adds checked but unlisted PACKs already in data to user.script.txt. Other unchecked PACKs will not be enabled automatically."
         Case "请选择用户脚本目录"
             Return "Select the user script folder"
         Case "已更新用户脚本目录。"
@@ -190,6 +214,12 @@ Func _T($sText)
             Return "No valid game directory has been set."
         Case "user.script.txt 尚不存在。"
             Return "user.script.txt does not exist yet."
+        Case "无法读取 user.script.txt，所有 PACK 暂不标记为已激活。"
+            Return "Could not read user.script.txt; no PACK will be marked as active."
+        Case "无法读取 user.script.txt，无法恢复 PACK 激活状态。"
+            Return "Could not read user.script.txt; PACK activation states could not be restored."
+        Case "无法读取 user.script.txt，无法安全判断当前激活状态。"
+            Return "Could not read user.script.txt; current activation states cannot be determined safely."
         Case "脚本目录："
             Return "Script directory: "
         Case "请先设置有效的游戏目录。"
@@ -258,12 +288,12 @@ Func _T($sText)
             Return "Fully exit and restart the game, then verify."
         Case "请先单击选中一个 PACK 行，再点击上移或下移。"
             Return "Select one PACK row, then click Up or Down."
-        Case "复选框仅用于批量激活/停用。"
-            Return "Checkboxes are only for batch Activate/Deactivate."
+        Case "勾选框显示当前状态，也用于指定批量操作目标。"
+            Return "Checkboxes show current status and select batch-operation targets."
         Case "排序操作一次只处理一个 PACK。请仅选中一行。"
             Return "Reordering moves one PACK at a time. Select exactly one row."
-        Case "只能调整已激活（位于 data 目录）的 PACK 加载顺序。"
-            Return "Only active PACKs (in the data folder) can be reordered."
+        Case "只能调整已激活（已登记在 user.script.txt 且位于 data 目录）的 PACK 加载顺序。"
+            Return "Only active PACKs listed in user.script.txt and located in the data folder can be reordered."
         Case "请先激活该 PACK，再使用上移/下移。"
             Return "Activate this PACK before using Up/Down."
         Case "该 PACK 已位于激活列表顶部。"
@@ -331,7 +361,7 @@ Func _SetLanguage($sNewLang)
     Local $aChecked[0], $aSelected[0]
     Local $iCount = _GUICtrlListView_GetItemCount($gListH)
     For $i = 0 To $iCount - 1
-        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 5)
+        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 6)
         If $sPath = "" Then ContinueLoop
         If _GUICtrlListView_GetItemChecked($gListH, $i) Then
             Local $nChecked = UBound($aChecked)
@@ -355,7 +385,7 @@ Func _SetLanguage($sNewLang)
 
     Local $iNewCount = _GUICtrlListView_GetItemCount($gListH)
     For $i = 0 To $iNewCount - 1
-        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 5)
+        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 6)
         For $j = 0 To UBound($aChecked) - 1
             If StringLower($sPath) = StringLower($aChecked[$j]) Then
                 _GUICtrlListView_SetItemChecked($gListH, $i, True)
@@ -368,6 +398,7 @@ Func _SetLanguage($sNewLang)
                 ExitLoop
             EndIf
         Next
+        _UpdateRowVisualState($i)
     Next
     GUISetState(@SW_SHOW, $gGUI)
 EndFunc
@@ -456,6 +487,17 @@ Func _CreateUI()
         GUICtrlSetColor($id, 0x8F9BAA)
     EndIf
 
+    ; Game launch buttons: place them in the right column above the author label.
+    ; The buttons share the subtitle row; the subtitle width is reduced below to prevent overlap.
+    $gBtnSteam = GUICtrlCreateButton(_T("从Steam启动游戏"), _Scale(700), _Scale(103), _Scale(130), _Scale(32))
+    _StyleButton($gBtnSteam)
+    GUICtrlSetBkColor($gBtnSteam, 0x356A9A)
+    GUICtrlSetColor($gBtnSteam, 0xFFFFFF)
+    $gBtnLaunchExe = GUICtrlCreateButton(_T("直接启动游戏EXE"), _Scale(835), _Scale(103), _Scale(140), _Scale(32))
+    _StyleButton($gBtnLaunchExe)
+    GUICtrlSetBkColor($gBtnLaunchExe, 0x397B57)
+    GUICtrlSetColor($gBtnLaunchExe, 0xFFFFFF)
+
     ; Language selectors in the upper-right corner.
     $gBtnLangEnglish = GUICtrlCreateButton("English", _Scale(830), _Scale(12), _Scale(68), _Scale(27))
     _StyleButton($gBtnLangEnglish)
@@ -467,10 +509,10 @@ Func _CreateUI()
     $id = GUICtrlCreateLabel("For Total War: SHOGUN 2 - Complete Edition", _Scale(350), _Scale(32), _Scale(465), _Scale(20))
     GUICtrlSetFont($id, 9, 700, 0, "Segoe UI")
     GUICtrlSetColor($id, 0xD8A45E)
-    $id = GUICtrlCreateLabel("S2CE ModManager", _Scale(348), _Scale(58), _Scale(610), _Scale(40))
+    $id = GUICtrlCreateLabel("S2CE ModManager", _Scale(348), _Scale(58), _Scale(340), _Scale(40))
     GUICtrlSetFont($id, 23, 700, 0, "Segoe UI")
     GUICtrlSetColor($id, 0xF1F3F5)
-    $id = GUICtrlCreateLabel(_T("《全面战争：幕府将军2》完全版 · MOD管理工具"), _Scale(350), _Scale(105), _Scale(600), _Scale(22))
+    $id = GUICtrlCreateLabel(_T("《全面战争：幕府将军2》完全版 · MOD管理工具"), _Scale(350), _Scale(105), _Scale(340), _Scale(22))
     GUICtrlSetFont($id, 10, 400, 0, "Segoe UI")
     GUICtrlSetColor($id, 0xAAB4C3)
     GUICtrlCreateLabel("", _Scale(350), _Scale(141), _Scale(600), _Scale(2))
@@ -521,8 +563,8 @@ Func _CreateUI()
     $id = GUICtrlCreateLabel(_T("使用说明"), _Scale(20), _Scale(531), _Scale(245), _Scale(20))
     GUICtrlSetColor($id, 0xD8A45E)
     GUICtrlSetFont($id, 10, 600, 0, "Segoe UI")
-    $id = GUICtrlCreateLabel(_T("1.先勾选需要处理的 PACK；未勾选项不操作。") & @CRLF & _
-            _T("2.激活：将勾选且位于 Disabled_Mods 的 PACK 移回 data，并更新 user.script.txt。") & @CRLF & _
+    $id = GUICtrlCreateLabel(_T("1.仅位于 data 且登记在 user.script.txt 的 PACK 自动勾选。") & @CRLF & _
+            _T("2.激活：勾选目标 PACK；需要时移回 data，并加入脚本。") & @CRLF & _
             _T("3.停用：将勾选且位于 data 的 PACK 移至 Disabled_Mods，并更新 user.script.txt。") & @CRLF & _
             _T("4.选择已激活的 PACK 行，使用上移/下移调整加载顺序。") & @CRLF & _
             _T("5.完成后建议重新启动游戏。"), _
@@ -534,13 +576,14 @@ Func _CreateUI()
     $id = GUICtrlCreateLabel(_T("本地 PACK 列表"), _Scale(300), _Scale(215), _Scale(400), _Scale(24))
     GUICtrlSetFont($id, 12, 700, 0, "Segoe UI")
     GUICtrlSetColor($id, 0xE5E7EB)
-    ; 排序按钮使用列表行的高亮选择状态；复选框仍只用于批量激活/停用。
-    $gBtnMoveUp = GUICtrlCreateButton(_T("↑ 上移"), _Scale(790), _Scale(210), _Scale(80), _Scale(30))
-    _StyleButton($gBtnMoveUp)
-    GUICtrlSetBkColor($gBtnMoveUp, 0x356A9A)
-    $gBtnMoveDown = GUICtrlCreateButton(_T("↓ 下移"), _Scale(875), _Scale(210), _Scale(80), _Scale(30))
-    _StyleButton($gBtnMoveDown)
-    GUICtrlSetBkColor($gBtnMoveDown, 0x356A9A)
+    $id = GUICtrlCreateLabel("● " & _T("已激活"), _Scale(785), _Scale(219), _Scale(82), _Scale(18))
+    GUICtrlSetFont($id, 8, 600, 0, "Segoe UI")
+    GUICtrlSetColor($id, 0xA8E6BD)
+    $id = GUICtrlCreateLabel("● " & _T("未激活且已勾选"), _Scale(850), _Scale(219), _Scale(125), _Scale(18))
+    GUICtrlSetFont($id, 8, 600, 0, "Segoe UI")
+    GUICtrlSetColor($id, 0xF0D39C)
+    ; 上移/下移按钮放在底部操作栏，位于“停用”和“打开 data”之间。
+    ; 使用较窄按钮，避免挤压其他操作按钮。
     ; 状态灯与常驻文字放在“设置”标题所在区域的右上角。
     $gLblReadyLight = GUICtrlCreateLabel("●", _Scale(130), _Scale(215), _Scale(22), _Scale(24), $SS_CENTER)
     GUICtrlSetFont($gLblReadyLight, 16, 700, 0, "Segoe UI Symbol")
@@ -548,17 +591,23 @@ Func _CreateUI()
     GUICtrlSetFont($gLblReadyText, 9, 400, 0, "Segoe UI")
     GUICtrlSetColor($gLblReadyText, 0xAAB4C3)
 
-    $gList = GUICtrlCreateListView(_T("选中|PACK 文件名|类型|大小|文件位置|内部路径"), _
+    $gList = GUICtrlCreateListView(_T("选中|PACK 文件名|类型|大小|激活状态|文件位置|内部路径|真实状态"), _
             _Scale(300), _Scale(244), _Scale(680), _Scale(325), BitOR($LVS_REPORT, $LVS_SHOWSELALWAYS))
     $gListH = GUICtrlGetHandle($gList)
     _GUICtrlListView_SetExtendedListViewStyle($gListH, _
             BitOR($LVS_EX_CHECKBOXES, $LVS_EX_FULLROWSELECT, $LVS_EX_GRIDLINES))
     _GUICtrlListView_SetColumnWidth($gListH, 0, _Scale(50))
-    _GUICtrlListView_SetColumnWidth($gListH, 1, _Scale(285))
-    _GUICtrlListView_SetColumnWidth($gListH, 2, _Scale(60))
-    _GUICtrlListView_SetColumnWidth($gListH, 3, _Scale(100))
-    _GUICtrlListView_SetColumnWidth($gListH, 4, _Scale(185))
-    _GUICtrlListView_SetColumnWidth($gListH, 5, 0) ; 隐藏列保存真实文件路径，供移动操作使用
+    _GUICtrlListView_SetColumnWidth($gListH, 1, _Scale(230))
+    _GUICtrlListView_SetColumnWidth($gListH, 2, _Scale(55))
+    _GUICtrlListView_SetColumnWidth($gListH, 3, _Scale(80))
+    _GUICtrlListView_SetColumnWidth($gListH, 4, _Scale(95))
+    _GUICtrlListView_SetColumnWidth($gListH, 5, _Scale(170))
+    _GUICtrlListView_SetColumnWidth($gListH, 6, 0) ; 隐藏列保存真实文件路径，供移动操作使用
+    _GUICtrlListView_SetColumnWidth($gListH, 7, 0) ; 隐藏列保存扫描得到的真实激活状态
+    If Not $gListNotifyRegistered Then
+        GUIRegisterMsg($WM_NOTIFY, "_WM_NOTIFY")
+        $gListNotifyRegistered = True
+    EndIf
     GUICtrlSetBkColor($gList, 0x242831)
     GUICtrlSetColor($gList, 0xE5E7EB)
     GUICtrlSetFont($gList, 12, 400, 0, "Segoe UI")   ; 增大字体，从而增大行高
@@ -576,10 +625,12 @@ Func _CreateUI()
     _StyleButton($gBtnDeactivate)
     GUICtrlSetBkColor($gBtnDeactivate, 0xA83D45) ; 红色
     GUICtrlSetColor($gBtnDeactivate, 0xFFFFFF)
-    $gBtnSteam = GUICtrlCreateButton(_T("从Steam启动游戏"), _Scale(630), _Scale(582), _Scale(110), _Scale(36))
-    _StyleButton($gBtnSteam)
-    GUICtrlSetBkColor($gBtnSteam, 0x356A9A) ; 蓝色
-    GUICtrlSetColor($gBtnSteam, 0xFFFFFF)
+    $gBtnMoveUp = GUICtrlCreateButton(_T("↑ 上移"), _Scale(600), _Scale(582), _Scale(65), _Scale(36))
+    _StyleButton($gBtnMoveUp)
+    GUICtrlSetBkColor($gBtnMoveUp, 0x356A9A)
+    $gBtnMoveDown = GUICtrlCreateButton(_T("↓ 下移"), _Scale(670), _Scale(582), _Scale(65), _Scale(36))
+    _StyleButton($gBtnMoveDown)
+    GUICtrlSetBkColor($gBtnMoveDown, 0x356A9A)
     $gBtnOpenData = GUICtrlCreateButton(_T("打开 data"), _Scale(780), _Scale(582), _Scale(95), _Scale(36))
     _StyleButton($gBtnOpenData)
     $gBtnOpenDisabled = GUICtrlCreateButton(_T("打开停用区"), _Scale(880), _Scale(582), _Scale(95), _Scale(36))
@@ -673,6 +724,7 @@ Func _ChooseScriptDir()
     $gScriptDir = $s
     _UpdatePaths()
     _RefreshPathLabels()
+    _ScanMods()
     _Log(_T("已更新用户脚本目录。"))
 EndFunc
 
@@ -682,6 +734,21 @@ Func _OpenGameDir()
         Return
     EndIf
     ShellExecute($gGameDir)
+EndFunc
+
+Func _LaunchGameExe()
+    If $gGameDir = "" Or Not FileExists($gGameDir & "\shogun2_complete_edition.exe") Then
+        MsgBox($MB_ICONWARNING, $APP, _T("找不到游戏主程序，无法启动。") & @CRLF & $gGameDir)
+        Return
+    EndIf
+
+    Local $sExe = $gGameDir & "\shogun2_complete_edition.exe"
+    ShellExecute($sExe, "", $gGameDir)
+    If @error Then
+        MsgBox($MB_ICONWARNING, $APP, _T("找不到游戏主程序，无法启动。") & @CRLF & $sExe)
+        Return
+    EndIf
+    _Log(_T("已请求直接启动游戏。"))
 EndFunc
 
 Func _OpenScriptFile()
@@ -700,18 +767,28 @@ Func _ScanMods()
         _SetStatus(_T("请先设置有效的游戏目录。"))
         Return
     EndIf
+
+    ; user.script.txt 才是启用状态的唯一依据；文件位于 data 并不代表已启用。
+    Local $aScriptActive[0]
+    Local $bScriptReadable = _ReadActivePackNames($aScriptActive)
+
     _GUICtrlListView_DeleteAllItems($gListH)
-    _ScanFolder($gDataDir)
-    Local $iActiveCount = _GUICtrlListView_GetItemCount($gListH)
-    _ScanFolder($gDisabledDir)
+    _ScanFolder($gDataDir, $aScriptActive, $bScriptReadable)
+    Local $iDataCount = _GUICtrlListView_GetItemCount($gListH)
+    _ScanFolder($gDisabledDir, $aScriptActive, $bScriptReadable)
 
-    ; 先确保顺序稳定，再按 user.script.txt 中现有的 PACK 指令排列已激活 MOD。
-    _SortRowsByName(0, $iActiveCount - 1)
-    _SortActiveRowsByScriptOrder($iActiveCount)
-    _SortRowsByName($iActiveCount, _GUICtrlListView_GetItemCount($gListH) - 1)
+    ; 已登记的 PACK 按 user.script.txt 中的顺序排列；未登记的 data PACK 排在其后。
+    _SortRowsByName(0, $iDataCount - 1)
+    If $bScriptReadable Then _SortActiveRowsByScriptOrder($iDataCount)
+    _SortRowsByName($iDataCount, _GUICtrlListView_GetItemCount($gListH) - 1)
 
-    _SetStatus(_T("扫描完成，共 ") & _GUICtrlListView_GetItemCount($gListH) & _T(" 个 PACK。"))
-    _Log(_T("扫描完成。"))
+    If $bScriptReadable Then
+        _SetStatus(_T("扫描完成，共 ") & _GUICtrlListView_GetItemCount($gListH) & _T(" 个 PACK。"))
+        _Log(_T("扫描完成。"))
+    Else
+        _SetStatus(_T("无法读取 user.script.txt，所有 PACK 暂不标记为已激活。"))
+        _Log(_T("无法读取 user.script.txt，无法恢复 PACK 激活状态。"))
+    EndIf
 EndFunc
 
 Func _SortRowsByName($iStart, $iEnd)
@@ -758,17 +835,17 @@ EndFunc
 
 Func _SwapListRows($iA, $iB)
     If $iA = $iB Then Return
-    Local $aTextA[6], $aTextB[6]
+    Local $aTextA[8], $aTextB[8]
     Local $bCheckedA = _GUICtrlListView_GetItemChecked($gListH, $iA)
     Local $bCheckedB = _GUICtrlListView_GetItemChecked($gListH, $iB)
     Local $bSelectedA = _GUICtrlListView_GetItemSelected($gListH, $iA)
     Local $bSelectedB = _GUICtrlListView_GetItemSelected($gListH, $iB)
 
-    For $iCol = 0 To 5
+    For $iCol = 0 To 7
         $aTextA[$iCol] = _GUICtrlListView_GetItemText($gListH, $iA, $iCol)
         $aTextB[$iCol] = _GUICtrlListView_GetItemText($gListH, $iB, $iCol)
     Next
-    For $iCol = 0 To 5
+    For $iCol = 0 To 7
         _GUICtrlListView_SetItemText($gListH, $iA, $aTextB[$iCol], $iCol)
         _GUICtrlListView_SetItemText($gListH, $iB, $aTextA[$iCol], $iCol)
     Next
@@ -779,7 +856,7 @@ Func _SwapListRows($iA, $iB)
     _GUICtrlListView_SetItemSelected($gListH, $iB, $bSelectedA)
 EndFunc
 
-Func _ScanFolder($sFolder)
+Func _ScanFolder($sFolder, ByRef $aScriptActive, $bScriptReadable)
     If Not FileExists($sFolder) Then Return
     Local $h = FileFindFirstFile($sFolder & "\*.pack")
     If $h = -1 Then Return
@@ -794,13 +871,137 @@ Func _ScanFolder($sFolder)
         _GUICtrlListView_AddSubItem($gListH, $i, $sName, 1)
         _GUICtrlListView_AddSubItem($gListH, $i, _ReadPackType($sFull), 2)
         _GUICtrlListView_AddSubItem($gListH, $i, _FormatSize(FileGetSize($sFull)), 3)
-        _GUICtrlListView_AddSubItem($gListH, $i, _GetLocationLabel($sFull), 4)
-        _GUICtrlListView_AddSubItem($gListH, $i, $sFull, 5)
-        ; 复选框只表示“本次操作目标”，不代表 PACK 当前是否已激活。
-        ; 扫描后统一保持未勾选，避免误把所有活动 PACK 当作批量停用目标。
-        _GUICtrlListView_SetItemChecked($gListH, $i, False)
+        _GUICtrlListView_AddSubItem($gListH, $i, "", 4) ; 由 _UpdateRowVisualState 填入动态状态
+        _GUICtrlListView_AddSubItem($gListH, $i, _GetLocationLabel($sFull), 5)
+        _GUICtrlListView_AddSubItem($gListH, $i, $sFull, 6)
+
+        ; 真实激活状态必须同时满足：位于 data 且登记在 user.script.txt。
+        ; 状态文件不可读时使用 ?，避免把未知状态错误显示为未激活。
+        Local $bChecked = False
+        Local $sActualState = "?"
+        If $bScriptReadable Then
+            $sActualState = "0"
+            If _IsInFolder($sFull, $gDataDir) And _FindNameInArray($sName, $aScriptActive) >= 0 Then
+                $bChecked = True
+                $sActualState = "1"
+            EndIf
+        EndIf
+        _GUICtrlListView_AddSubItem($gListH, $i, $sActualState, 7)
+        _GUICtrlListView_SetItemChecked($gListH, $i, $bChecked)
+        _UpdateRowVisualState($i)
     WEnd
     FileClose($h)
+EndFunc
+
+Func _UpdateRowVisualState($iRow)
+    If $iRow < 0 Or $iRow >= _GUICtrlListView_GetItemCount($gListH) Then Return
+
+    ; 复选框是批量操作的选择项，不代表期望启用状态；此列只反映真实状态。
+    Local $sActualState = _GUICtrlListView_GetItemText($gListH, $iRow, 7)
+    Local $sDisplayState = _T("状态未知")
+    If $sActualState = "1" Then
+        $sDisplayState = _T("已激活")
+    ElseIf $sActualState = "0" Then
+        $sDisplayState = _T("未激活")
+    EndIf
+    _GUICtrlListView_SetItemText($gListH, $iRow, $sDisplayState, 4)
+EndFunc
+
+Func _GetRowColors($iRow, ByRef $iTextColor, ByRef $iBackColor)
+    ; 行选中时优先显示蓝色系统式高亮。
+    If _GUICtrlListView_GetItemSelected($gListH, $iRow) Then
+        $iTextColor = 0xFFFFFF
+        $iBackColor = 0x3B526B
+        Return
+    EndIf
+
+    Local $sActualState = _GUICtrlListView_GetItemText($gListH, $iRow, 7)
+    Local $bChecked = _GUICtrlListView_GetItemChecked($gListH, $iRow)
+
+    If $sActualState = "1" Then
+        ; 真实已激活：无论复选框是否勾选，始终使用绿色。
+        $iTextColor = 0xA8E6BD
+        $iBackColor = 0x293C32
+    ElseIf $sActualState = "0" And $bChecked Then
+        ; 未激活但已勾选：琥珀色仅表示已被选入批量操作。
+        $iTextColor = 0xF0D39C
+        $iBackColor = 0x3B3426
+    ElseIf $sActualState = "?" Then
+        ; 无法读取 user.script.txt：用中性灰蓝色表示状态未知。
+        $iTextColor = 0xB8C0CC
+        $iBackColor = 0x303540
+    Else
+        ; 未激活且未选择：维持列表默认深色背景。
+        $iTextColor = 0xE5E7EB
+        $iBackColor = 0x242831
+    EndIf
+EndFunc
+
+Func _RGBToColorRef($iRGB)
+    ; AutoIt uses 0xRRGGBB; NM_CUSTOMDRAW expects Win32 COLORREF (0x00BBGGRR).
+    Local $iRed = BitAND(BitShift($iRGB, 16), 0xFF)
+    Local $iGreen = BitAND(BitShift($iRGB, 8), 0xFF)
+    Local $iBlue = BitAND($iRGB, 0xFF)
+    Return ($iBlue * 0x10000) + ($iGreen * 0x100) + $iRed
+EndFunc
+
+Func _WM_NOTIFY($hWnd, $iMsg, $wParam, $lParam)
+    If $lParam = 0 Or $gListH = 0 Then Return $GUI_RUNDEFMSG
+
+    ; NMHDR is a nested Win32 structure; parse its padded size separately so x86/x64 offsets stay correct.
+    Local $iAlign = @AutoItX64 ? 8 : 4
+    Local $tHeader = DllStructCreate("align " & $iAlign & ";hwnd hwndFrom;uint_ptr idFrom;int code", $lParam)
+    If @error Then Return $GUI_RUNDEFMSG
+    If DllStructGetData($tHeader, "hwndFrom") <> $gListH Then Return $GUI_RUNDEFMSG
+
+    Local $pBody = Ptr(DllStructGetPtr($tHeader) + DllStructGetSize($tHeader))
+    Local $iCode = DllStructGetData($tHeader, "code")
+    Switch $iCode
+        Case -12 ; NM_CUSTOMDRAW
+            Local $tDraw = DllStructCreate( _
+                    "align " & $iAlign & ";dword dwDrawStage;hwnd hdc;long rcLeft;long rcTop;long rcRight;long rcBottom;" & _
+                    "uint_ptr dwItemSpec;uint uItemState;long_ptr lItemlParam;dword clrText;" & _
+                    "dword clrTextBk;int iSubItem;dword dwItemType;dword clrFace;int iIconEffect;" & _
+                    "int iIconPhase;int iPartId;int iStateId;long rcTextLeft;long rcTextTop;" & _
+                    "long rcTextRight;long rcTextBottom;uint uAlign", $pBody)
+            If @error Then Return $GUI_RUNDEFMSG
+
+            Local $iStage = DllStructGetData($tDraw, "dwDrawStage")
+            If $iStage = 0x00000001 Then ; CDDS_PREPAINT
+                Return 0x00000020 ; CDRF_NOTIFYITEMDRAW
+            EndIf
+
+            If $iStage = 0x00010001 Or $iStage = 0x00030001 Then ; ITEMPREPAINT / SUBITEM
+                Local $iRow = DllStructGetData($tDraw, "dwItemSpec")
+                If $iRow >= 0 And $iRow < _GUICtrlListView_GetItemCount($gListH) Then
+                    Local $iTextColor = 0xE5E7EB, $iBackColor = 0x242831
+                    _GetRowColors($iRow, $iTextColor, $iBackColor)
+                    DllStructSetData($tDraw, "clrText", _RGBToColorRef($iTextColor))
+                    DllStructSetData($tDraw, "clrTextBk", _RGBToColorRef($iBackColor))
+                EndIf
+                If $iStage = 0x00010001 Then Return BitOR(0x00000002, 0x00000020) ; NEWFONT | NOTIFYSUBITEMDRAW
+                Return 0x00000002 ; CDRF_NEWFONT
+            EndIf
+
+        Case -101 ; LVN_ITEMCHANGED: redraw after checkbox changes.
+            Local $tChanged = DllStructCreate( _
+                    "align " & $iAlign & ";int iItem;int iSubItem;uint uNewState;uint uOldState;uint uChanged;" & _
+                    "long ptX;long ptY;long_ptr lParam", $pBody)
+            If @error Then Return $GUI_RUNDEFMSG
+
+            Local $iChangedRow = DllStructGetData($tChanged, "iItem")
+            Local $iNewState = DllStructGetData($tChanged, "uNewState")
+            Local $iOldState = DllStructGetData($tChanged, "uOldState")
+            Local $iChangedFlags = DllStructGetData($tChanged, "uChanged")
+            ; LVIF_STATE=0x0008; state-image index occupies bits 12..15.
+            If BitAND($iChangedFlags, 0x0008) And _
+                    BitAND($iNewState, 0xF000) <> BitAND($iOldState, 0xF000) Then
+                _UpdateRowVisualState($iChangedRow)
+                _GUICtrlListView_RedrawItems($gListH, $iChangedRow, $iChangedRow)
+            EndIf
+    EndSwitch
+
+    Return $GUI_RUNDEFMSG
 EndFunc
 
 Func _IsOfficialPack($sName)
@@ -873,6 +1074,14 @@ Func _ApplyMods($bEnable)
     If $gBusy Then Return
     ; 任何激活/停用操作开始前，先验证游戏目录和用户脚本目录。
     If Not _ValidatePaths() Then Return
+
+    ; 必须先读取脚本状态，避免把“在 data 中但未登记”的 PACK 误判为已激活。
+    Local $aScriptActive[0]
+    If Not _ReadActivePackNames($aScriptActive) Then
+        MsgBox($MB_ICONWARNING, $APP, _T("无法读取 user.script.txt，无法安全判断当前激活状态。") & @CRLF & $gScriptFile)
+        Return
+    EndIf
+
     Local $sActionNoun = ""
     If $bEnable Then
         $sActionNoun = ($gLang = "EN" ? "Activation" : _T("激活"))
@@ -881,10 +1090,11 @@ Func _ApplyMods($bEnable)
     EndIf
     Local $sConfirm = ""
     If $bEnable Then
-        $sConfirm = _T("激活时会将勾选且位于 Disabled_Mods 的 PACK 移至 data；已在 data 的 PACK 不重复移动。操作后将清空并重建 user.script.txt，写入 data 中全部用户 PACK。")
+        $sConfirm = _T("激活时会将勾选且位于 Disabled_Mods 的 PACK 移至 data；位于 data 但尚未登记的勾选 PACK 也会加入 user.script.txt。不会自动启用其他未勾选的 PACK。")
     Else
         $sConfirm = _T("仅处理已勾选且位于 data 的 PACK：移入 Disabled_Mods 目录并从 user.script.txt 移除。")
     EndIf
+
     Local $iCount = _GUICtrlListView_GetItemCount($gListH)
     Local $iSelected = 0
     For $i = 0 To $iCount - 1
@@ -892,8 +1102,7 @@ Func _ApplyMods($bEnable)
     Next
     If $iSelected = 0 Then
         Local $sNeedSelection = $bEnable ? _T("请先勾选需要激活的 PACK。") : _T("请先勾选需要停用的 PACK。")
-        MsgBox($MB_ICONINFORMATION, $APP, $sNeedSelection & @CRLF & _
-                _T("未勾选的项目不会被处理。"))
+        MsgBox($MB_ICONINFORMATION, $APP, $sNeedSelection & @CRLF & _T("未勾选的项目不会被处理。"))
         Return
     EndIf
     If MsgBox(BitOR($MB_YESNO, $MB_ICONQUESTION), $APP, $sActionNoun & _T("操作：") & @CRLF & _
@@ -906,65 +1115,89 @@ Func _ApplyMods($bEnable)
 
     For $i = 0 To $iCount - 1
         Local $sName = _GUICtrlListView_GetItemText($gListH, $i, 1)
-        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 5)
+        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 6)
         Local $bChecked = _GUICtrlListView_GetItemChecked($gListH, $i)
-        If $sName = "" Or $sPath = "" Then ContinueLoop
-        ; 复选框只负责指定本次操作目标：未勾选项目一律跳过。
-        If Not $bChecked Then ContinueLoop
-        Local $bCurrent = _IsInFolder($sPath, $gDataDir)
-        ; 激活只移动当前停用区中的文件；停用只移动当前 data 目录中的文件。
-        ; 已处于目标状态的文件跳过，不做重复移动。
-        If $bEnable = $bCurrent Then
-            _Log(_T("已处于目标状态，跳过：") & $sName)
-            ContinueLoop
-        EndIf
-        Local $bWant = $bEnable
-        If Not FileExists($sPath) Then
-            _Log(_T("文件已不存在，跳过：") & $sName)
-            $iFailed += 1
-            ContinueLoop
-        EndIf
-        Local $sDest
-        If $bWant Then
+        If $sName = "" Or $sPath = "" Or Not $bChecked Then ContinueLoop
+
+        Local $bCurrentlyActive = (_FindNameInArray($sName, $aScriptActive) >= 0)
+        Local $sDest = ""
+
+        If $bEnable Then
+            ; data 中但未登记的 PACK：不移动文件，只新增 user.script.txt 指令。
+            If _IsInFolder($sPath, $gDataDir) Then
+                If Not $bCurrentlyActive Then
+                    _PushChange($aChanges, $sName, True)
+                    $bNeedScript = True
+                EndIf
+                ContinueLoop
+            EndIf
+
+            ; 只把 Disabled_Mods 中勾选的 PACK 移回 data。
+            If Not _IsInFolder($sPath, $gDisabledDir) Then ContinueLoop
+            If Not FileExists($sPath) Then
+                _Log(_T("文件已不存在，跳过：") & $sName)
+                $iFailed += 1
+                ContinueLoop
+            EndIf
             $sDest = $gDataDir & "\" & $sName
+            If FileExists($sDest) Then
+                _Log(_T("目标已存在，未覆盖：") & $sName)
+                $iFailed += 1
+                ContinueLoop
+            EndIf
+            If FileMove($sPath, $sDest, 0) Then
+                _Log(_T("移动成功：") & $sName & " -> " & $sDest)
+                $iMoved += 1
+                _PushChange($aChanges, $sName, True)
+                $bNeedScript = True
+            Else
+                _Log(_T("移动失败：") & $sName)
+                $iFailed += 1
+            EndIf
         Else
-            $sDest = $gDisabledDir & "\" & $sName
-            If Not FileExists($gDisabledDir) Then DirCreate($gDisabledDir)
-        EndIf
-        If FileExists($sDest) Then
-            _Log(_T("目标已存在，未覆盖：") & $sName)
-            $iFailed += 1
-            ContinueLoop
-        EndIf
-        If FileMove($sPath, $sDest, 0) Then
-            _Log(_T("移动成功：") & $sName & " -> " & $sDest)
-            $iMoved += 1
-            _PushChange($aChanges, $sName, $bWant)
-            $bNeedScript = True
-        Else
-            _Log(_T("移动失败：") & $sName)
-            $iFailed += 1
+            ; 停用：移动 data 中勾选的 PACK，并仅移除该 PACK 的脚本指令。
+            If _IsInFolder($sPath, $gDataDir) Then
+                If Not FileExists($sPath) Then
+                    _Log(_T("文件已不存在，跳过：") & $sName)
+                    $iFailed += 1
+                    ContinueLoop
+                EndIf
+                If Not FileExists($gDisabledDir) Then DirCreate($gDisabledDir)
+                $sDest = $gDisabledDir & "\" & $sName
+                If FileExists($sDest) Then
+                    _Log(_T("目标已存在，未覆盖：") & $sName)
+                    $iFailed += 1
+                    ContinueLoop
+                EndIf
+                If FileMove($sPath, $sDest, 0) Then
+                    _Log(_T("移动成功：") & $sName & " -> " & $sDest)
+                    $iMoved += 1
+                    If $bCurrentlyActive Then
+                        _PushChange($aChanges, $sName, False)
+                        $bNeedScript = True
+                    EndIf
+                Else
+                    _Log(_T("移动失败：") & $sName)
+                    $iFailed += 1
+                EndIf
+            ElseIf _IsInFolder($sPath, $gDisabledDir) And $bCurrentlyActive Then
+                ; 清理“脚本仍登记、文件却已在停用区”的异常残留指令。
+                _PushChange($aChanges, $sName, False)
+                $bNeedScript = True
+            EndIf
         EndIf
     Next
 
-    If $bEnable Then
-        ; 先重新扫描磁盘上的实际状态。即使没有移动任何文件，也必须重建脚本，
-        ; 这样已位于 data 的 PACK 也会被写入 user.script.txt。
-        _ScanMods()
-        If Not _RebuildActiveScript() Then
+    ; 只差量增删本次选中的 PACK 指令；保留脚本中的其他 MOD、注释和原有顺序。
+    If $bNeedScript Then
+        If Not _UpdateScript($aChanges) Then
             _Log(_T("严重警告：脚本更新失败。文件移动已完成，请手动检查并修正 user.script.txt。"))
-            MsgBox($MB_ICONWARNING, $APP, _T("PACK 文件移动已执行，但 user.script.txt 更新失败。") & @CRLF & _T("请检查用户脚本文件：") & @CRLF & $gScriptDir)
+            MsgBox($MB_ICONWARNING, $APP, _T("PACK 文件移动已执行，但 user.script.txt 更新失败。") & @CRLF & _T("请检查用户脚本文件：") & @CRLF & $gScriptFile)
         EndIf
-    Else
-        ; 停用操作继续采用原有的差量更新逻辑。
-        If $bNeedScript Then
-            If Not _UpdateScript($aChanges) Then
-                _Log(_T("严重警告：脚本更新失败。文件移动已完成，请手动检查并修正 user.script.txt。"))
-                MsgBox($MB_ICONWARNING, $APP, _T("PACK 文件移动已执行，但 user.script.txt 更新失败。") & @CRLF & _T("请检查用户脚本文件：") & @CRLF & $gScriptDir)
-            EndIf
-        EndIf
-        _ScanMods()
     EndIf
+
+    ; 操作完成后重新读取 user.script.txt，按真实脚本状态刷新勾选框。
+    _ScanMods()
     _SetStatus($sActionNoun & _T("完成：成功移动 ") & $iMoved & _T(" 个，失败/跳过 ") & $iFailed & _T(" 个。"))
     _Log($sActionNoun & _T("结束。移动=") & $iMoved & _T("，失败/跳过=") & $iFailed)
     $gBusy = False
@@ -984,7 +1217,7 @@ Func _MoveSelectedPack($iDirection)
 
     If $iSelectedCount = 0 Then
         MsgBox($MB_ICONINFORMATION, $APP, _T("请先单击选中一个 PACK 行，再点击上移或下移。") & @CRLF & _
-                _T("复选框仅用于批量激活/停用。"))
+                _T("复选框指定批量操作目标；状态列显示实际激活状态。"))
         Return
     EndIf
     If $iSelectedCount > 1 Then
@@ -992,10 +1225,15 @@ Func _MoveSelectedPack($iDirection)
         Return
     EndIf
 
-    Local $sPath = _GUICtrlListView_GetItemText($gListH, $iSelected, 5)
+    Local $sPath = _GUICtrlListView_GetItemText($gListH, $iSelected, 6)
     Local $sName = _GUICtrlListView_GetItemText($gListH, $iSelected, 1)
-    If Not _IsInFolder($sPath, $gDataDir) Then
-        MsgBox($MB_ICONINFORMATION, $APP, _T("只能调整已激活（位于 data 目录）的 PACK 加载顺序。") & @CRLF & _
+    Local $aScriptActive[0]
+    If Not _ReadActivePackNames($aScriptActive) Then
+        MsgBox($MB_ICONWARNING, $APP, _T("无法读取 user.script.txt，无法安全判断当前激活状态。") & @CRLF & $gScriptFile)
+        Return
+    EndIf
+    If Not _IsInFolder($sPath, $gDataDir) Or _FindNameInArray($sName, $aScriptActive) < 0 Then
+        MsgBox($MB_ICONINFORMATION, $APP, _T("只能调整已激活（已登记在 user.script.txt 且位于 data 目录）的 PACK 加载顺序。") & @CRLF & _
                 _T("请先激活该 PACK，再使用上移/下移。"))
         Return
     EndIf
@@ -1005,8 +1243,9 @@ Func _MoveSelectedPack($iDirection)
         _SetStatus($iDirection < 0 ? _T("该 PACK 已位于激活列表顶部。") : _T("该 PACK 已位于激活列表底部。"))
         Return
     EndIf
-    Local $sTargetPath = _GUICtrlListView_GetItemText($gListH, $iTarget, 5)
-    If Not _IsInFolder($sTargetPath, $gDataDir) Then
+    Local $sTargetPath = _GUICtrlListView_GetItemText($gListH, $iTarget, 6)
+    Local $sTargetName = _GUICtrlListView_GetItemText($gListH, $iTarget, 1)
+    If Not _IsInFolder($sTargetPath, $gDataDir) Or _FindNameInArray($sTargetName, $aScriptActive) < 0 Then
         _SetStatus($iDirection < 0 ? _T("该 PACK 已位于激活列表顶部。") : _T("该 PACK 已位于激活列表底部。"))
         Return
     EndIf
@@ -1029,15 +1268,18 @@ Func _WriteActiveOrderToScript()
     If $gScriptDir = "" Then Return False
     If Not FileExists($gScriptDir) And Not DirCreate($gScriptDir) Then Return False
 
-    ; 收集当前位于 data 的 PACK，并以列表顺序作为加载顺序。
+    ; 只收集“位于 data 且已登记在 user.script.txt”的 PACK，避免排序时误启用其他文件。
+    Local $aScriptActive[0]
+    If Not _ReadActivePackNames($aScriptActive) Then Return False
     Local $aActiveNames[0]
     Local $iCount = _GUICtrlListView_GetItemCount($gListH)
     For $i = 0 To $iCount - 1
-        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 5)
-        If _IsInFolder($sPath, $gDataDir) Then
+        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 6)
+        Local $sName = _GUICtrlListView_GetItemText($gListH, $i, 1)
+        If _IsInFolder($sPath, $gDataDir) And _FindNameInArray($sName, $aScriptActive) >= 0 Then
             Local $n = UBound($aActiveNames)
             ReDim $aActiveNames[$n + 1]
-            $aActiveNames[$n] = _GUICtrlListView_GetItemText($gListH, $i, 1)
+            $aActiveNames[$n] = $sName
         EndIf
     Next
     If UBound($aActiveNames) = 0 Then Return False
@@ -1063,8 +1305,7 @@ Func _WriteActiveOrderToScript()
         EndIf
     Next
 
-    ; 保留脚本中其他指令/注释的位置；只替换已激活 PACK 对应的行。
-    ; 如果某个已激活 PACK 尚无指令，会在最后一个 PACK 槽位后补齐；重复指令会被去重。
+    ; 保留其他指令/注释的位置；只替换当前确实激活的 PACK 行。
     Local $aOut[0]
     Local $iPackSlot = 0
     Local $iLastSlot = 0
@@ -1087,7 +1328,6 @@ Func _WriteActiveOrderToScript()
                 $aOut[$nManaged] = "mod """ & $aActiveNames[$iPackSlot] & """;"
                 $iPackSlot += 1
             EndIf
-            ; 多余的重复 active PACK 指令不再复制。
         Else
             Local $nOther = UBound($aOut)
             ReDim $aOut[$nOther + 1]
@@ -1133,6 +1373,32 @@ Func _ExtractPackName($sLine)
     Local $sName = $aMatch[0]
     If $sName = "" And UBound($aMatch) > 1 Then $sName = $aMatch[1]
     Return $sName
+EndFunc
+
+Func _ReadActivePackNames(ByRef $aNames)
+    ; 不存在 user.script.txt 代表当前没有通过该文件启用任何 PACK。
+    ReDim $aNames[0]
+    If Not FileExists($gScriptFile) Then Return True
+
+    Local $hRead = FileOpen($gScriptFile, $FO_READ + $FO_UTF16_LE)
+    If $hRead = -1 Then Return False
+    Local $sContent = FileRead($hRead)
+    Local $iReadError = @error
+    FileClose($hRead)
+    If $iReadError Then Return False
+
+    ; 兼容 CRLF、LF 和单独 CR 换行。
+    $sContent = StringReplace($sContent, @CRLF, @LF)
+    $sContent = StringReplace($sContent, @CR, @LF)
+    Local $aLines = StringSplit($sContent, @LF, 1)
+    For $i = 1 To $aLines[0]
+        Local $sName = _ExtractPackName($aLines[$i])
+        If $sName = "" Or _FindNameInArray($sName, $aNames) >= 0 Then ContinueLoop
+        Local $n = UBound($aNames)
+        ReDim $aNames[$n + 1]
+        $aNames[$n] = $sName
+    Next
+    Return True
 EndFunc
 
 Func _PushChange(ByRef $a, $sName, $bEnabled)
@@ -1208,38 +1474,7 @@ Func _ValidatePaths()
     Return True
 EndFunc
 
-Func _RebuildActiveScript()
-    If $gScriptDir = "" Then Return False
-    If Not FileExists($gScriptDir) And Not DirCreate($gScriptDir) Then Return False
 
-    ; _ScanMods 已按旧脚本的顺序排列当前 data 中的用户 PACK；
-    ; 只从实际存在于 data 的扫描结果生成新脚本，不保留旧注释或旧指令。
-    Local $sNew = ""
-    Local $iCount = _GUICtrlListView_GetItemCount($gListH)
-    For $i = 0 To $iCount - 1
-        Local $sName = _GUICtrlListView_GetItemText($gListH, $i, 1)
-        Local $sPath = _GUICtrlListView_GetItemText($gListH, $i, 5)
-        If $sName = "" Or $sPath = "" Then ContinueLoop
-        If Not _IsInFolder($sPath, $gDataDir) Then ContinueLoop
-        If Not FileExists($sPath) Then ContinueLoop
-        If $sNew <> "" Then $sNew &= @CRLF
-        $sNew &= "mod """ & $sName & """;"
-    Next
-    If $sNew <> "" Then $sNew &= @CRLF
-
-    ; FO_OVERWRITE 会先截断/清空 user.script.txt，再把完整的新内容写入。
-    ; 空列表时也打开并覆盖文件，从而得到真正的空脚本。
-    Local $hWrite = FileOpen($gScriptFile, BitOR($FO_OVERWRITE, $FO_UTF16_LE))
-    If $hWrite = -1 Then Return False
-    Local $bOK = True
-    If $sNew <> "" Then
-        FileWrite($hWrite, $sNew)
-        $bOK = (@error = 0)
-    EndIf
-    FileClose($hWrite)
-    If $bOK Then _Log(_T("user.script.txt 已更新（UTF-16 LE）。"))
-    Return $bOK
-EndFunc
 
 Func _UpdateScript(ByRef $aChanges)
     If $gScriptDir = "" Then Return False
